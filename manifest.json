@@ -1,0 +1,10 @@
+{
+  "domain": "singapore_power",
+  "name": "Singapore Power",
+  "version": "0.0.1",
+  "documentation": "https://github.com/your_github_username/singapore_power",
+  "requirements": ["aiohttp>=3.8.0"],
+  "dependencies": [],
+  "codeowners": ["@your_github_username"],
+  "iot_class": "cloud_polling"
+}
