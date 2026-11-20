@@ -1,30 +1,90 @@
 {
-    "config": {
-        "step": {
-            "user": {
-                "title": "Singapore Power",
-                "description": "Enter your Singapore Power credentials.",
-                "data": {
-                    "username": "Username",
-                    "password": "Password"
-                }
-            },
-            "mfa": {
-                "title": "Multi-Factor Authentication",
-                "description": "Enter the One-Time Password (OTP) sent to your registered mobile number.",
-                "data": {
-                    "otp": "OTP"
-                }
-            }
-        },
-        "error": {
-            "cannot_connect": "Unable to connect to the Singapore Power API. Please check your internet connection.",
-            "invalid_auth": "Invalid username or password. Please try again.",
-            "invalid_otp": "Invalid OTP. Please try again.",
-            "unknown": "An unknown error occurred. Please check the logs."
-        },
-        "abort": {
-            "already_configured": "This account is already configured."
+  "config": {
+    "step": {
+      "user": {
+        "title": "Singapore Power (SP Group)",
+        "description": "Sign in with your SP App email address and password. Your password is used once to obtain OAuth tokens and is never stored.",
+        "data": {
+          "username": "Email / Username",
+          "password": "Password"
         }
+      },
+      "mfa_method": {
+        "title": "Choose Verification Method",
+        "description": "Select how you would like to verify your SP Group login.",
+        "data": {
+          "mfa_method": "Verification Method"
+        }
+      },
+      "mfa": {
+        "title": "Two-Factor Verification",
+        "description": "Enter the verification code from {mfa_source}.",
+        "data": {
+          "otp": "Verification Code"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Singapore Power",
+        "description": "Your Singapore Power session for {username} has expired. Please sign in again.",
+        "data": {
+          "username": "Email / Username",
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Singapore Power",
+        "description": "Sign in again to refresh credentials for {username}.",
+        "data": {
+          "username": "Email / Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Singapore Power API. Please check your internet connection.",
+      "invalid_auth": "Invalid email/username or password.",
+      "invalid_otp": "Invalid or expired verification code. Please try again.",
+      "requires_verification": "SP Group temporarily flagged this sign-in for extra verification. Wait a few minutes or sign in once via the official SP mobile app, then retry.",
+      "too_many_attempts": "Too many recent sign-in attempts. Please wait 60 seconds before trying again.",
+      "unknown": "An unexpected error occurred. Please check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This Singapore Power account is already configured.",
+      "auth_object_missing": "Authentication session expired. Please restart setup.",
+      "reauth_successful": "Re-authentication was successful.",
+      "reconfigure_successful": "Reconfiguration was successful.",
+      "unique_id_mismatch": "The account entered does not match the configured Singapore Power account."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Singapore Power Options",
+        "description": "Configure polling frequency, Recorder statistics backfill, optional SP ecosystem insights, and an optional custom OEM electricity rate.",
+        "data": {
+          "scan_interval_minutes": "Update interval (minutes)",
+          "enable_recorder_statistics": "Import historical & hourly consumption, cost, and bill statistics into Recorder (Energy Dashboard)",
+          "enable_extended_insights": "Fetch regulated tariffs, OEM comparisons, Green Goals, GreenUP, EV charging & Tengah FCUs",
+          "electricity_price": "Custom electricity tariff override (SGD/kWh, optional)"
+        },
+        "data_description": {
+          "electricity_price": "Leave blank to use SP's live regulated tariff when SP's smart meter feed omits slot cost. Enter your fixed OEM rate (e.g. 0.2780) to price electricity sensors and Recorder cost statistics at your retailer rate."
+        }
+      }
+    },
+    "error": {
+      "invalid_electricity_price": "Enter a valid rate between 0 and 10 SGD/kWh, or leave blank to use SP's regulated tariff."
+    }
+  },
+  "exceptions": {
+    "auth_failed": {
+      "message": "Singapore Power authentication expired or was revoked ({error}). Please re-authenticate."
+    },
+    "requires_verification": {
+      "message": "Singapore Power temporarily requested bot verification ({error}); Home Assistant will retry automatically."
+    },
+    "usage_failed": {
+      "message": "Failed communicating with Singapore Power ({error})."
+    }
+  }
 }
