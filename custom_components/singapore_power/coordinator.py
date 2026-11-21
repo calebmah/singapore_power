@@ -375,10 +375,9 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         if not active_services and pno:
             active_services.append("electricity")
 
-        # 2. Refresh SP Regulated Tariff BEFORE utility cost computation so null AMI amounts get priced
+        # 2. Refresh SP Regulated Electricity, Gas & PUB Water tariffs BEFORE utility cost computation
         if (
-            "electricity" in active_services
-            and (self.enable_extended_insights or self.custom_electricity_price is None)
+            any(u in active_services for u in ("electricity", "water", "gas"))
             and (refresh_meta or acct not in self._tariff_cache)
         ):
             elec_billed = billed_summaries.get("electricity")
@@ -399,6 +398,11 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             self.custom_electricity_price
             if self.custom_electricity_price is not None
             else (tariff.sp_kwh_price if tariff else None)
+        )
+        effective_gas_rate = tariff.sp_gas_kwh_price if tariff else None
+        effective_water_rate = tariff.sp_water_m3_price if tariff else None
+        effective_water_tier2_rate = (
+            tariff.sp_water_above40_m3_price if tariff else None
         )
         prefer_custom_rate = self.custom_electricity_price is not None
 
@@ -421,7 +425,15 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         for util_key in ("electricity", "water", "gas"):
             if util_key not in active_services and util_key not in meter_readings:
                 continue
-            rate = effective_elec_rate if util_key == "electricity" else None
+            if util_key == "electricity":
+                rate = effective_elec_rate
+                tier2_rate = None
+            elif util_key == "water":
+                rate = effective_water_rate
+                tier2_rate = effective_water_tier2_rate
+            else:
+                rate = effective_gas_rate
+                tier2_rate = None
             prefer_override = prefer_custom_rate if util_key == "electricity" else False
             util_result, stat_job = await self._async_process_utility(
                 premise=premise,
@@ -435,6 +447,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 billed_summary=billed_summaries.get(util_key),
                 meter_reading=meter_readings.get(util_key),
                 fallback_cost_rate=rate,
+                tier2_cost_rate=tier2_rate,
                 prefer_rate_override=prefer_override,
             )
             utilities_payload[util_key] = util_result
@@ -499,6 +512,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         billed_summary: UtilityBilledSummary | None,
         meter_reading: MeterReadingDetail | None,
         fallback_cost_rate: float | None,
+        tier2_cost_rate: float | None,
         prefer_rate_override: bool,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """Fetch AMI charts (if supported) and reconcile cumulative ledger for one utility."""
@@ -659,6 +673,8 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 "utility_key": util_key,
                 "unit": unit,
                 "months": list(billed_summary.months),
+                "unit_rate": fallback_cost_rate,
+                "tier2_unit_rate": tier2_cost_rate,
             }
 
         latest_pt: Consumption | None = None
@@ -886,6 +902,8 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                         utility_key=job["utility_key"],
                         unit=job["unit"],
                         months=job["months"],
+                        unit_rate=job.get("unit_rate"),
+                        tier2_unit_rate=job.get("tier2_unit_rate"),
                     )
 
                 elif kind == "bills":

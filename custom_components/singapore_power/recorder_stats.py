@@ -14,6 +14,7 @@ from homeassistant.const import UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .pysingaporepower.const import WATER_TIER1_THRESHOLD_M3
 from .pysingaporepower.models import BilledMonthPoint, BillRecord, Consumption
 from .pysingaporepower.utils import round_sgd, start_of_sg_day, start_of_sg_month
 
@@ -316,6 +317,27 @@ async def async_import_hourly_statistics(
         )
 
 
+def _compute_billed_month_cost_sgd(
+    consumption: float,
+    unit_rate: float | None,
+    *,
+    tier2_rate: float | None = None,
+    tier1_threshold: float = WATER_TIER1_THRESHOLD_M3,
+) -> float | None:
+    """Compute monthly billed SGD cost, supporting 2-tier PUB domestic water pricing."""
+    if unit_rate is None or unit_rate <= 0:
+        return None
+    if consumption <= 0:
+        return 0.0
+    if tier2_rate is not None and tier2_rate > 0 and consumption > tier1_threshold:
+        base_part = Decimal(str(tier1_threshold)) * Decimal(str(unit_rate))
+        excess_part = Decimal(str(consumption - tier1_threshold)) * Decimal(
+            str(tier2_rate)
+        )
+        return round_sgd(base_part + excess_part)
+    return round_sgd(Decimal(str(consumption)) * Decimal(str(unit_rate)))
+
+
 async def async_import_billed_monthly_statistics(
     hass: HomeAssistant,
     account_no: str,
@@ -323,8 +345,11 @@ async def async_import_billed_monthly_statistics(
     utility_key: str,
     unit: str,
     months: list[BilledMonthPoint],
+    *,
+    unit_rate: float | None = None,
+    tier2_unit_rate: float | None = None,
 ) -> None:
-    """Import 12-month billed consumption points into Recorder for non-AMI meters (e.g. piped gas)."""
+    """Import 12-month billed consumption & SGD cost points into Recorder for non-AMI meters."""
     if not months or "recorder" not in hass.config.components:
         return
 
@@ -353,6 +378,7 @@ async def async_import_billed_monthly_statistics(
     acct_slug = _sanitize_stat_slug(account_no)
     util_slug = _sanitize_stat_slug(utility_key)
     stat_id = f"{DOMAIN}:{acct_slug}_{util_slug}_consumption"
+    cost_stat_id = f"{DOMAIN}:{acct_slug}_{util_slug}_cost"
     ha_unit, unit_class = _resolve_ha_unit(unit)
 
     recorder = get_instance(hass)
@@ -383,6 +409,47 @@ async def async_import_billed_monthly_statistics(
             unit_class=unit_class,
         )
         async_add_external_statistics(hass, meta, stat_data)
+
+        if unit_rate is not None and unit_rate > 0:
+            existing_cost = await recorder.async_add_executor_job(
+                statistics_during_period,
+                hass,
+                earliest - timedelta(days=800),
+                earliest - timedelta(seconds=1),
+                {cost_stat_id},
+                "hour",
+                None,
+                {"sum"},
+            )
+            cost_rows = existing_cost.get(cost_stat_id) or []
+            running_cost = (
+                float(cost_rows[-1]["sum"])
+                if cost_rows and cost_rows[-1].get("sum") is not None
+                else 0.0
+            )
+
+            cost_data: list[StatisticData] = []
+            for bkt in sorted_buckets:
+                cval = _compute_billed_month_cost_sgd(
+                    by_bucket[bkt],
+                    unit_rate,
+                    tier2_rate=tier2_unit_rate,
+                )
+                if cval is None:
+                    continue
+                running_cost = round(running_cost + cval, 2)
+                cost_data.append(
+                    StatisticData(start=bkt, state=cval, sum=running_cost)
+                )
+
+            if cost_data:
+                cost_meta = _build_statistic_metadata(
+                    statistic_id=cost_stat_id,
+                    name=f"{premise_label} {utility_key.title()} Cost",
+                    unit="SGD",
+                    unit_class=None,
+                )
+                async_add_external_statistics(hass, cost_meta, cost_data)
     except Exception as err:
         _LOGGER.warning(
             "Failed importing monthly billed Recorder statistics for %s (%s): %s",

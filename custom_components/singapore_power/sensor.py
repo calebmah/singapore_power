@@ -53,6 +53,7 @@ PARALLEL_UPDATES = 0
 
 CURRENCY_SGD = "SGD"
 UNIT_SGD_PER_KWH = "SGD/kWh"
+UNIT_SGD_PER_M3 = "SGD/m³"
 UNIT_LEAVES = "leaves"
 UNIT_POINTS = "points"
 UNIT_ORDERS = "orders"
@@ -590,6 +591,39 @@ PREMISE_SENSOR_DESCRIPTIONS: tuple[SingaporePowerPremiseSensorDescription, ...] 
         ),
         attributes_fn=_meter_reading_attrs("water"),
     ),
+    SingaporePowerPremiseSensorDescription(
+        key="sp_water_tariff",
+        unique_id_suffix="sp_water_tariff",
+        name="SP Domestic Water Price",
+        icon="mdi:tag-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UNIT_SGD_PER_M3,
+        suggested_display_precision=4,
+        exists_fn=lambda d: (
+            _has_service("water")(d)
+            and (t := _get_tariff(d)) is not None
+            and t.sp_water_m3_price is not None
+        ),
+        value_fn=lambda d: t.sp_water_m3_price if (t := _get_tariff(d)) else None,
+        attributes_fn=lambda d: (
+            {
+                "price_0_to_40_m3_incl_gst": t.sp_water_m3_price,
+                "price_0_to_40_m3_excl_gst": t.sp_water_m3_price_excl_gst,
+                "price_above_40_m3_incl_gst": t.sp_water_above40_m3_price,
+                "price_above_40_m3_excl_gst": t.sp_water_above40_m3_price_excl_gst,
+                "water_tariff_0_to_40_excl_gst": t.sp_water_base_tariff_excl_gst,
+                "water_conservation_tax_0_to_40_excl_gst": t.sp_water_wct_excl_gst,
+                "waterborne_tax_0_to_40_excl_gst": t.sp_water_wbt_excl_gst,
+                "water_tariff_above_40_excl_gst": t.sp_water_above40_base_tariff_excl_gst,
+                "water_conservation_tax_above_40_excl_gst": t.sp_water_above40_wct_excl_gst,
+                "waterborne_tax_above_40_excl_gst": t.sp_water_above40_wbt_excl_gst,
+                "tariff_year": t.water_tariff_year,
+                "tariff_source": t.water_tariff_source,
+            }
+            if (t := _get_tariff(d))
+            else None
+        ),
+    ),
     # =========================================================================
     # GAS SENSORS (Dynamic unit/device_class: kWh -> ENERGY, m³ -> GAS)
     # =========================================================================
@@ -713,6 +747,30 @@ PREMISE_SENSOR_DESCRIPTIONS: tuple[SingaporePowerPremiseSensorDescription, ...] 
         attributes_fn=_meter_reading_attrs("gas"),
         dynamic_unit_fn=_gas_unit,
         dynamic_device_class_fn=_gas_device_class,
+    ),
+    SingaporePowerPremiseSensorDescription(
+        key="sp_gas_tariff",
+        unique_id_suffix="sp_gas_tariff",
+        name="SP Piped Gas Tariff",
+        icon="mdi:tag-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UNIT_SGD_PER_KWH,
+        suggested_display_precision=4,
+        exists_fn=lambda d: (
+            _has_service("gas")(d)
+            and (t := _get_tariff(d)) is not None
+            and t.sp_gas_kwh_price is not None
+        ),
+        value_fn=lambda d: t.sp_gas_kwh_price if (t := _get_tariff(d)) else None,
+        attributes_fn=lambda d: (
+            {
+                "sp_gas_kwh_price_excl_gst": t.sp_gas_kwh_price_excl_gst,
+                "tariff_period": t.tariff_period,
+                "tariff_source": t.gas_tariff_source or t.tariff_source,
+            }
+            if (t := _get_tariff(d))
+            else None
+        ),
     ),
     # =========================================================================
     # TENGAH CENTRALIZED COOLING SENSORS

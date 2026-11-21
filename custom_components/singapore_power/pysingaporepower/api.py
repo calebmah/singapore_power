@@ -49,7 +49,9 @@ from .const import (
     QUERY_YCS_PREMISES_DETAILS_V3,
     SCOPE_NOT_FOUND,
     SG_GST_MULTIPLIER,
+    SINGSTAT_GAS_TARIFF_URL,
     SINGSTAT_TARIFF_URL,
+    SINGSTAT_WATER_PRICE_URL,
     SPGROUP_TARIFF_PAGE_URL,
     TENGAH_PAIRED_FCUS_QUERY,
     TRANSPORT_ERROR_CHARS,
@@ -1163,7 +1165,7 @@ class SingaporePowerApi:
     async def async_get_tariff_comparison(
         self, monthly_kwh: float = 350.0
     ) -> TariffComparisonSummary | None:
-        """Fetch current SP regulated electricity tariff (via SP B2C/Public or SingStat/data.gov.sg)."""
+        """Fetch current SP regulated electricity & gas tariffs + PUB domestic water prices."""
         rounded_kwh = (
             round_half_up(Decimal(str(monthly_kwh)), "1")
             if monthly_kwh and monthly_kwh > 0
@@ -1171,6 +1173,7 @@ class SingaporePowerApi:
         )
         ref_kwh = max(50, int(rounded_kwh or 350))
 
+        summary: TariffComparisonSummary | None = None
         data: Any = None
         for candidate_url, use_auth in (
             (B2C_PRICE_PLAN_URL, True),
@@ -1190,73 +1193,120 @@ class SingaporePowerApi:
                 data = res
                 break
 
-        if not isinstance(data, dict):
-            web_tariff = await self._async_fetch_spgroup_web_tariff(ref_kwh)
-            if web_tariff is not None:
-                return web_tariff
-            return await self._async_fetch_gov_regulated_tariff(ref_kwh)
-
-        sp_kwh_price = safe_float(data.get("sp_kwh_price"))
-        sp_monthly = safe_float(data.get("sp_monthly_price"))
-        if sp_kwh_price is None and sp_monthly is None:
-            web_tariff = await self._async_fetch_spgroup_web_tariff(ref_kwh)
-            if web_tariff is not None:
-                return web_tariff
-            return await self._async_fetch_gov_regulated_tariff(ref_kwh)
-        plans = data.get("price_plans") or []
-
-        best_fixed_rate: float | None = None
-        best_fixed_retailer: str | None = None
-        best_fixed_plan: str | None = None
-        best_fixed_savings: float | None = None
-
-        best_disc_pct: float | None = None
-        best_disc_rate: float | None = None
-        best_disc_retailer: str | None = None
-        best_disc_plan: str | None = None
-
-        for plan in plans if isinstance(plans, list) else []:
-            if not isinstance(plan, dict):
-                continue
-            retailer = plan.get("retailer_name")
-            plan_name = plan.get("plan_name")
-            summary = plan.get("price_summary") if isinstance(plan.get("price_summary"), dict) else {}
-
-            fixed_obj = plan.get("fixed_price") if isinstance(plan.get("fixed_price"), dict) else {}
-            fixed_price = safe_float(fixed_obj.get("price"))
-            if fixed_price is not None and (
-                best_fixed_rate is None or fixed_price < best_fixed_rate
-            ):
-                best_fixed_rate = fixed_price
-                best_fixed_retailer = retailer
-                best_fixed_plan = plan_name
-                best_fixed_savings = safe_float(summary.get("monthly_savings"))
-
-            disc_obj = plan.get("discount_off_tariff") if isinstance(plan.get("discount_off_tariff"), dict) else {}
-            disc_pct = safe_float(disc_obj.get("percent"))
-            disc_price = safe_float(disc_obj.get("price"))
-            if disc_pct is not None and (
-                best_disc_pct is None or disc_pct > best_disc_pct
-            ):
-                best_disc_pct = disc_pct
-                best_disc_rate = disc_price
-                best_disc_retailer = retailer
-                best_disc_plan = plan_name
-
-        return TariffComparisonSummary(
-            sp_kwh_price=sp_kwh_price,
-            sp_monthly_price=sp_monthly,
-            reference_consumption_kwh=float(ref_kwh),
-            best_fixed_rate=best_fixed_rate,
-            best_fixed_retailer=best_fixed_retailer,
-            best_fixed_plan=best_fixed_plan,
-            best_fixed_monthly_savings=best_fixed_savings,
-            best_discount_pct=best_disc_pct,
-            best_discount_rate=best_disc_rate,
-            best_discount_retailer=best_disc_retailer,
-            best_discount_plan=best_disc_plan,
-            total_oem_plans=len(plans) if isinstance(plans, list) else 0,
+        web_tariff, water_info = await asyncio.gather(
+            self._async_fetch_spgroup_web_tariff(ref_kwh),
+            self._async_fetch_singstat_water_price(),
         )
+
+        if isinstance(data, dict):
+            sp_kwh_price = safe_float(data.get("sp_kwh_price"))
+            sp_monthly = safe_float(data.get("sp_monthly_price"))
+            if sp_kwh_price is not None or sp_monthly is not None:
+                plans = data.get("price_plans") or []
+
+                best_fixed_rate: float | None = None
+                best_fixed_retailer: str | None = None
+                best_fixed_plan: str | None = None
+                best_fixed_savings: float | None = None
+
+                best_disc_pct: float | None = None
+                best_disc_rate: float | None = None
+                best_disc_retailer: str | None = None
+                best_disc_plan: str | None = None
+
+                for plan in plans if isinstance(plans, list) else []:
+                    if not isinstance(plan, dict):
+                        continue
+                    retailer = plan.get("retailer_name")
+                    plan_name = plan.get("plan_name")
+                    psummary = (
+                        plan.get("price_summary")
+                        if isinstance(plan.get("price_summary"), dict)
+                        else {}
+                    )
+
+                    fixed_obj = (
+                        plan.get("fixed_price")
+                        if isinstance(plan.get("fixed_price"), dict)
+                        else {}
+                    )
+                    fixed_price = safe_float(fixed_obj.get("price"))
+                    if fixed_price is not None and (
+                        best_fixed_rate is None or fixed_price < best_fixed_rate
+                    ):
+                        best_fixed_rate = fixed_price
+                        best_fixed_retailer = retailer
+                        best_fixed_plan = plan_name
+                        best_fixed_savings = safe_float(psummary.get("monthly_savings"))
+
+                    disc_obj = (
+                        plan.get("discount_off_tariff")
+                        if isinstance(plan.get("discount_off_tariff"), dict)
+                        else {}
+                    )
+                    disc_pct = safe_float(disc_obj.get("percent"))
+                    disc_price = safe_float(disc_obj.get("price"))
+                    if disc_pct is not None and (
+                        best_disc_pct is None or disc_pct > best_disc_pct
+                    ):
+                        best_disc_pct = disc_pct
+                        best_disc_rate = disc_price
+                        best_disc_retailer = retailer
+                        best_disc_plan = plan_name
+
+                summary = TariffComparisonSummary(
+                    sp_kwh_price=sp_kwh_price,
+                    sp_monthly_price=sp_monthly,
+                    reference_consumption_kwh=float(ref_kwh),
+                    tariff_source="spdigital.sg",
+                    best_fixed_rate=best_fixed_rate,
+                    best_fixed_retailer=best_fixed_retailer,
+                    best_fixed_plan=best_fixed_plan,
+                    best_fixed_monthly_savings=best_fixed_savings,
+                    best_discount_pct=best_disc_pct,
+                    best_discount_rate=best_disc_rate,
+                    best_discount_retailer=best_disc_retailer,
+                    best_discount_plan=best_disc_plan,
+                    total_oem_plans=len(plans) if isinstance(plans, list) else 0,
+                )
+
+        if summary is None:
+            summary = web_tariff or await self._async_fetch_gov_regulated_tariff(ref_kwh)
+        elif web_tariff is not None:
+            if summary.sp_kwh_price_excl_gst is None:
+                summary.sp_kwh_price_excl_gst = web_tariff.sp_kwh_price_excl_gst
+            if summary.sp_gas_kwh_price is None:
+                summary.sp_gas_kwh_price = web_tariff.sp_gas_kwh_price
+                summary.sp_gas_kwh_price_excl_gst = web_tariff.sp_gas_kwh_price_excl_gst
+                summary.gas_tariff_source = web_tariff.gas_tariff_source
+            if summary.tariff_period is None:
+                summary.tariff_period = web_tariff.tariff_period
+
+        if summary is None and water_info:
+            summary = TariffComparisonSummary(reference_consumption_kwh=float(ref_kwh))
+
+        if summary is not None and summary.sp_gas_kwh_price is None:
+            gas_fallback = await self._async_fetch_singstat_gas_tariff()
+            if gas_fallback:
+                summary.sp_gas_kwh_price = gas_fallback["incl_gst"]
+                summary.sp_gas_kwh_price_excl_gst = gas_fallback["excl_gst"]
+                summary.gas_tariff_source = "singstat.gov.sg"
+
+        if summary is not None and water_info:
+            summary.sp_water_m3_price = water_info.get("tier1_incl_gst")
+            summary.sp_water_m3_price_excl_gst = water_info.get("tier1_excl_gst")
+            summary.sp_water_above40_m3_price = water_info.get("tier2_incl_gst")
+            summary.sp_water_above40_m3_price_excl_gst = water_info.get("tier2_excl_gst")
+            summary.sp_water_base_tariff_excl_gst = water_info.get("t1_base")
+            summary.sp_water_wct_excl_gst = water_info.get("t1_wct")
+            summary.sp_water_wbt_excl_gst = water_info.get("t1_wbt")
+            summary.sp_water_above40_base_tariff_excl_gst = water_info.get("t2_base")
+            summary.sp_water_above40_wct_excl_gst = water_info.get("t2_wct")
+            summary.sp_water_above40_wbt_excl_gst = water_info.get("t2_wbt")
+            summary.water_tariff_year = water_info.get("year")
+            summary.water_tariff_source = "singstat.gov.sg"
+
+        return summary
 
     async def _async_fetch_spgroup_web_tariff(
         self, ref_kwh: int
@@ -1358,10 +1408,13 @@ class SingaporePowerApi:
                     if v_ex is not None and 5.0 <= v_ex <= 500.0:
                         elec_excl = round_half_up(Decimal(str(v_ex)) / Decimal("100"), "0.0001")
 
-        if elec_incl is None:
+        monthly_est = (
+            round_sgd(Decimal(str(elec_incl)) * Decimal(ref_kwh))
+            if elec_incl is not None
+            else None
+        )
+        if elec_incl is None and gas_incl is None:
             return None
-
-        monthly_est = round_sgd(Decimal(str(elec_incl)) * Decimal(ref_kwh))
         return TariffComparisonSummary(
             sp_kwh_price=elec_incl,
             sp_kwh_price_excl_gst=elec_excl,
@@ -1369,10 +1422,143 @@ class SingaporePowerApi:
             reference_consumption_kwh=float(ref_kwh),
             sp_gas_kwh_price=gas_incl,
             sp_gas_kwh_price_excl_gst=gas_excl,
+            gas_tariff_source="spgroup.com.sg" if gas_incl is not None else None,
             tariff_period=period_text,
             tariff_source="spgroup.com.sg",
             total_oem_plans=0,
         )
+
+    async def _async_fetch_singstat_gas_tariff(self) -> dict[str, float | None] | None:
+        """Fallback to SingStat TableBuilder M891051 Piped Town Gas General Tariff (+9% GST)."""
+        body = await self._optional_request(
+            "GET",
+            SINGSTAT_GAS_TARIFF_URL,
+            authenticated=False,
+            record_failure=False,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant-SP/0.3)"},
+        )
+        if not isinstance(body, dict):
+            return None
+        rows = (body.get("Data") or {}).get("row") or []
+        cents_pre_gst: float | None = None
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            label = fold_text(str(row.get("rowText") or ""))
+            if "piped town gas" in label and "general tariff" in label:
+                cols = row.get("columns") or []
+                for col in reversed(cols if isinstance(cols, list) else []):
+                    if isinstance(col, dict):
+                        val = safe_float(col.get("value"))
+                        if val is not None and val > 0:
+                            cents_pre_gst = val
+                            break
+                break
+        if cents_pre_gst is None:
+            return None
+        excl = round_half_up(Decimal(str(cents_pre_gst)) / Decimal("100"), "0.0001")
+        incl = round_half_up(
+            (Decimal(str(cents_pre_gst)) / Decimal("100")) * Decimal(SG_GST_MULTIPLIER),
+            "0.0001",
+        )
+        if incl is None:
+            return None
+        return {"incl_gst": incl, "excl_gst": excl}
+
+    async def _async_fetch_singstat_water_price(self) -> dict[str, Any] | None:
+        """Fetch official PUB all-in domestic potable water prices (Tariff + WCT + WBT) from SingStat M890981."""
+        body = await self._optional_request(
+            "GET",
+            SINGSTAT_WATER_PRICE_URL,
+            authenticated=False,
+            record_failure=False,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant-SP/0.3)"},
+        )
+        if not isinstance(body, dict):
+            return None
+
+        def _latest_col(row_obj: dict[str, Any]) -> tuple[float | None, str | None]:
+            cols = row_obj.get("columns") or []
+            for col in reversed(cols if isinstance(cols, list) else []):
+                if isinstance(col, dict):
+                    val = safe_float(col.get("value"))
+                    if val is not None and val > 0:
+                        key_str = str(col.get("key")).strip() if col.get("key") else None
+                        return val, key_str
+            return None, None
+
+        rows = (body.get("Data") or {}).get("row") or []
+        section: str | None = None
+        tier1_excl: float | None = None
+        tier2_excl: float | None = None
+        year_key: str | None = None
+        t1_base: float | None = None
+        t1_wct: float | None = None
+        t1_wbt: float | None = None
+        t2_base: float | None = None
+        t2_wct: float | None = None
+        t2_wbt: float | None = None
+
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            label = fold_text(str(row.get("rowText") or ""))
+            if "potable water price for domestic users" in label:
+                if "0-40" in label or "0 - 40" in label:
+                    section = "tier1"
+                    tier1_excl, year_key = _latest_col(row)
+                else:
+                    section = "tier2"
+                    tier2_excl, _ = _latest_col(row)
+            elif any(
+                k in label
+                for k in ("non-domestic", "shipping", "newater", "industrial")
+            ):
+                section = "other"
+            elif section == "tier1":
+                if label == "tariff":
+                    t1_base, _ = _latest_col(row)
+                elif "water conservation tax" in label:
+                    t1_wct, _ = _latest_col(row)
+                elif "waterborne" in label:
+                    t1_wbt, _ = _latest_col(row)
+            elif section == "tier2":
+                if label == "tariff":
+                    t2_base, _ = _latest_col(row)
+                elif "water conservation tax" in label:
+                    t2_wct, _ = _latest_col(row)
+                elif "waterborne" in label:
+                    t2_wbt, _ = _latest_col(row)
+
+        if tier1_excl is None:
+            return None
+
+        tier1_incl = round_half_up(
+            Decimal(str(tier1_excl)) * Decimal(SG_GST_MULTIPLIER), "0.0001"
+        )
+        tier2_incl = (
+            round_half_up(
+                Decimal(str(tier2_excl)) * Decimal(SG_GST_MULTIPLIER), "0.0001"
+            )
+            if tier2_excl is not None
+            else None
+        )
+        if tier1_incl is None:
+            return None
+
+        return {
+            "tier1_incl_gst": tier1_incl,
+            "tier1_excl_gst": tier1_excl,
+            "tier2_incl_gst": tier2_incl,
+            "tier2_excl_gst": tier2_excl,
+            "t1_base": t1_base,
+            "t1_wct": t1_wct,
+            "t1_wbt": t1_wbt,
+            "t2_base": t2_base,
+            "t2_wct": t2_wct,
+            "t2_wbt": t2_wbt,
+            "year": year_key,
+        }
 
     async def _async_fetch_gov_regulated_tariff(
         self, ref_kwh: int

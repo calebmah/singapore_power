@@ -1,14 +1,14 @@
 # <img src="custom_components/singapore_power/brand/icon.png" width="40" height="40" align="top" alt="Singapore Power" /> Singapore Power (SP Group) Home Assistant Integration
 
-Custom Home Assistant integration (`v0.3.4`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Tariffs / OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
+Custom Home Assistant integration (`v0.3.5`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Electricity / Gas / Water Tariffs & OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
 
 ## Key Capabilities
 
 - **Full Multi-Premise Household Utility Coverage:**
   - **Electricity (`kWh` & `SGD`):** Monotonic cumulative total (Energy Dashboard ready), Today's usage & cost, Yesterday's usage & cost (with half-hourly slot breakdown), Latest published 30-minute smart meter slot (automatically trimming padded future/unreported `0.0` slots), Month-to-Date usage & cost, Last Billed Month usage, Neighbour Average, Efficient Neighbour (Top 25%) Benchmark, 12-Month Average, Actual Hardware Meter Reading, and Official SP Regulated Tariff + Open Electricity Market (OEM) best fixed/discount plan attributes.
   - **Custom OEM Tariff / Automatic Rate Fallback:** When SP's residential AMI feed omits per-slot `amount` (`null`), electricity cost sensors and Recorder cost statistics automatically compute SGD cost from your configured OEM rate (`electricity_price` option) or SP's live regulated tariff — and dynamically reprice historical Recorder cost statistics when you change your rate.
-  - **Water (`m³` & `SGD`):** Monotonic cumulative total (Energy Dashboard ready), Smart Water Meter (AMI) Today / Yesterday / Latest 30m Slot / Month-to-Date usage & SGD cost, Last Billed Month usage, Neighbour Average, Efficient Neighbour Benchmark, 12-Month Average, and Actual Hardware Meter Reading.
-  - **Piped Town Gas (`kWh` or `m³` & `SGD`):** Monotonic cumulative total, AMI Today / Month-to-Date usage & SGD cost (where smart gas meters are installed), Last Billed Month usage, Neighbour Average, Efficient Neighbour Benchmark, 12-Month Average, and Actual Hardware Meter Reading.
+  - **Water (`m³` & `SGD`):** Monotonic cumulative total (Energy Dashboard ready), Smart Water Meter (AMI) Today / Yesterday / Latest 30m Slot / Month-to-Date usage & SGD cost, Last Billed Month usage, Neighbour Average, Efficient Neighbour Benchmark, 12-Month Average, Actual Hardware Meter Reading, and **Official PUB All-In Domestic Water Price** (`0–40 m³` & `> 40 m³` tiers incl. Water Tariff + Water Conservation Tax + Waterborne Tax + GST via SingStat `M890981`).
+  - **Piped Town Gas (`kWh` or `m³` & `SGD`):** Monotonic cumulative total, AMI Today / Month-to-Date usage & SGD cost (where smart gas meters are installed), Last Billed Month usage, Neighbour Average, Efficient Neighbour Benchmark, 12-Month Average, Actual Hardware Meter Reading, and **Official SP / City Energy Piped Gas Tariff** (`SGD/kWh` via `spgroup.com.sg` & SingStat `M891051`).
   - **Tengah Centralized Cooling (`kWh` & Per-Coil `°C`):** Cumulative, Today, and Month-to-Date cooling energy consumption (`/frosty/consumption`), plus automatic discovery of paired per-room **Fan Coil Units (FCUs)** with live room temperature (`°C`), setpoint, on/off state, online status, and operation mode.
 - **Billing, Payments, EV Charging & Account Ecosystem:**
   - **Billing & Payments:** Outstanding Bill Balance (`SGD`), Latest Bill Amount (UTC instant-sorted, with PDF URL & billing period attributes), Latest Bill Due Date (`date` device class), Latest Payment Amount (method, channel, recurring flag, transaction ID), Prepaid (PPMS) Credit Balance, Next Scheduled Meter Reading Date, and Electricity Retailer / Premise Info.
@@ -40,8 +40,8 @@ Custom Home Assistant integration (`v0.3.4`) for **Singapore Power (SP Group)** 
 
 In **Settings -> Dashboards -> Energy**, configure Electricity, Gas, and Water using either:
 - **Time-Aligned External Statistics (Recommended):**
-  - `singapore_power:<account>_electricity_consumption` (paired with cost statistic `singapore_power:<account>_electricity_cost`)
-  - `singapore_power:<account>_water_consumption` (paired with `singapore_power:<account>_water_cost` if AMI provides cost)
-  - `singapore_power:<account>_gas_consumption`
+  - `singapore_power:<account>_electricity_consumption` (paired with `singapore_power:<account>_electricity_cost`)
+  - `singapore_power:<account>_water_consumption` (paired with `singapore_power:<account>_water_cost`)
+  - `singapore_power:<account>_gas_consumption` (paired with `singapore_power:<account>_gas_cost`)
   - Monthly bill history is also available in Statistics Charts under `singapore_power:<account>_last_bill`.
 - **Live Cumulative Sensor Entities:** `sensor.sp_<account>_electricity`, `sensor.sp_<account>_water`, `sensor.sp_<account>_gas`.

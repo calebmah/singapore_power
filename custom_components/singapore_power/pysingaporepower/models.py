@@ -236,7 +236,7 @@ class GreenGoalSummary:
 
 @dataclass
 class TariffComparisonSummary:
-    """SP regulated electricity/gas tariffs and best Open Electricity Market (OEM) plan comparison."""
+    """SP regulated electricity, gas, and PUB water tariffs + OEM plan comparison."""
 
     sp_kwh_price: float | None = None
     sp_kwh_price_excl_gst: float | None = None
@@ -244,6 +244,19 @@ class TariffComparisonSummary:
     reference_consumption_kwh: float | None = None
     sp_gas_kwh_price: float | None = None
     sp_gas_kwh_price_excl_gst: float | None = None
+    gas_tariff_source: str | None = None
+    sp_water_m3_price: float | None = None
+    sp_water_m3_price_excl_gst: float | None = None
+    sp_water_above40_m3_price: float | None = None
+    sp_water_above40_m3_price_excl_gst: float | None = None
+    sp_water_base_tariff_excl_gst: float | None = None
+    sp_water_wct_excl_gst: float | None = None
+    sp_water_wbt_excl_gst: float | None = None
+    sp_water_above40_base_tariff_excl_gst: float | None = None
+    sp_water_above40_wct_excl_gst: float | None = None
+    sp_water_above40_wbt_excl_gst: float | None = None
+    water_tariff_year: str | None = None
+    water_tariff_source: str | None = None
     tariff_period: str | None = None
     tariff_source: str | None = None
     best_fixed_rate: float | None = None

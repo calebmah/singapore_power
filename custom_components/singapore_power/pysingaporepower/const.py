@@ -83,11 +83,14 @@ B2C_PRICE_PLAN_URL = f"{B2C_BASE_URL}/priceplan/v2/plans/price"
 PRICE_PLAN_URL = f"{PUBLIC_BASE_URL}/priceplan/v2/plans/price"
 SPGROUP_TARIFF_PAGE_URL = "https://www.spgroup.com.sg/our-services/utilities/tariff-information"
 SINGSTAT_TARIFF_URL = "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M890991"
+SINGSTAT_GAS_TARIFF_URL = "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M891051"
+SINGSTAT_WATER_PRICE_URL = "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M890981"
 DATAGOV_TARIFF_URL = (
     "https://data.gov.sg/api/action/datastore_search"
     "?resource_id=d_61eac3cdb086814af485dcc682b75ae9"
 )
 SG_GST_MULTIPLIER = "1.09"
+WATER_TIER1_THRESHOLD_M3 = 40.0
 HH_BACKFILL_BATCH_SIZE = 4
 
 # OneUp, Tyche, Eva & Notifications (Loyalty, EV Charging & In-App Alerts)
@@ -149,7 +152,9 @@ KNOWN_ROUTE_SEGMENTS = frozenset(
         "api",
         "table",
         "tabledata",
+        "M890981",
         "M890991",
+        "M891051",
         "action",
         "datastore_search",
         "1up",
