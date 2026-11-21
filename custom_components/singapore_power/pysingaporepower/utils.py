@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 import hashlib
 import json
@@ -147,6 +147,33 @@ def months_ago_sg_start(d: date | datetime, months_count: int) -> datetime:
         month += 12
         year -= 1
     return datetime(year, month, 1, 0, 0, 0, tzinfo=SG_TZ)
+
+
+def month_windows_sg(
+    d: date | datetime,
+    months_count: int,
+    end_cap: datetime | None = None,
+) -> list[tuple[datetime, datetime]]:
+    """Build chronological (month_start, month_end) SGT windows across months_count calendar months."""
+    if isinstance(d, datetime):
+        d = to_sg_datetime(d).date()
+    cap = end_cap or end_of_sg_day(d)
+    first_start = months_ago_sg_start(d, months_count)
+
+    windows: list[tuple[datetime, datetime]] = []
+    year, month = first_start.year, first_start.month
+    for idx in range(months_count):
+        m_start = datetime(year, month, 1, 0, 0, 0, tzinfo=SG_TZ)
+        if month == 12:
+            next_year, next_month = year + 1, 1
+        else:
+            next_year, next_month = year, month + 1
+        next_start = datetime(next_year, next_month, 1, 0, 0, 0, tzinfo=SG_TZ)
+        m_end = cap if idx == months_count - 1 else (next_start - timedelta(seconds=1))
+        if m_start <= cap:
+            windows.append((m_start, min(m_end, cap)))
+        year, month = next_year, next_month
+    return windows
 
 
 def format_api_date(dt: datetime) -> str:
@@ -351,12 +378,46 @@ def merge_ami_daily_and_half_hourly(
     daily_points: list[Consumption],
     half_hourly_points: list[Consumption],
 ) -> list[Consumption]:
-    """Prefer half-hourly AMI slots on days they cover; retain daily points for older months."""
+    """Prefer half-hourly AMI slots where SP retains real data; fall back to daily on older days."""
+    trimmed_daily = trim_unreported_points(daily_points)
     trimmed_hh = trim_unreported_points(half_hourly_points)
-    hh_days = {pt.date.astimezone(SG_TZ).date() for pt in trimmed_hh}
+    if not trimmed_hh:
+        return trimmed_daily
+
+    daily_by_day: dict[date, float] = {
+        pt.date.astimezone(SG_TZ).date(): pt.value for pt in trimmed_daily
+    }
+    hh_by_day: dict[date, list[Consumption]] = {}
+    hh_sum_by_day: dict[date, float] = {}
+    for pt in trimmed_hh:
+        d = pt.date.astimezone(SG_TZ).date()
+        hh_by_day.setdefault(d, []).append(pt)
+        hh_sum_by_day[d] = hh_sum_by_day.get(d, 0.0) + pt.value
+
+    nonzero_hh_days = [d for d, total in hh_sum_by_day.items() if total > 0]
+    if not nonzero_hh_days:
+        return trimmed_daily
+
+    earliest_real_hh_day = min(nonzero_hh_days)
+    latest_hh_day = max(hh_by_day.keys())
+
+    # SP returns 48 x 0.0 placeholder slots/day for dates older than its ~100-day half-hourly
+    # retention window; only adopt half-hourly slots where HH > 0 or daily is also 0.0.
+    valid_hh_days = {
+        d
+        for d in hh_by_day
+        if d >= earliest_real_hh_day
+        and (hh_sum_by_day.get(d, 0.0) > 0 or daily_by_day.get(d, 0.0) == 0.0)
+    }
+
     merged = [
-        pt for pt in daily_points if pt.date.astimezone(SG_TZ).date() not in hh_days
+        pt
+        for pt in trimmed_daily
+        if (d := pt.date.astimezone(SG_TZ).date()) not in valid_hh_days
+        and d <= latest_hh_day
     ]
-    merged.extend(trimmed_hh)
+    for d in valid_hh_days:
+        merged.extend(hh_by_day[d])
+
     merged.sort(key=lambda p: p.date)
     return merged

@@ -130,11 +130,12 @@ async def async_import_full_series(
     prefer_rate_override: bool = False,
     cost_only: bool = False,
 ) -> None:
-    """Import merged 13-month daily + 31-day half-hourly history starting from 0.0 cumulative sum."""
+    """Import merged 13-month daily + ~100-day half-hourly history starting from 0.0 cumulative sum."""
     if not points or "recorder" not in hass.config.components:
         return
 
     try:
+        from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.models import StatisticData
         from homeassistant.components.recorder.statistics import (
             async_add_external_statistics,
@@ -158,6 +159,16 @@ async def async_import_full_series(
     ha_unit, unit_class = _resolve_ha_unit(unit)
 
     try:
+        # Clear target statistic(s) ahead of initial full-series import or custom tariff repricing.
+        clear_targets: list[str] = []
+        if not cost_only:
+            clear_targets.append(cons_stat_id)
+        if has_cost and hourly_cost:
+            clear_targets.append(cost_stat_id)
+        if clear_targets:
+            clear_fn = getattr(get_instance(hass), "async_clear_statistics", None)
+            if callable(clear_fn):
+                clear_fn(clear_targets)
         if not cost_only:
             running_cons = 0.0
             cons_data: list[StatisticData] = []
@@ -352,7 +363,7 @@ async def async_import_billed_monthly_statistics(
             earliest - timedelta(days=800),
             earliest - timedelta(seconds=1),
             {stat_id},
-            "month",
+            "hour",
             None,
             {"sum"},
         )
@@ -425,7 +436,7 @@ async def async_import_bill_statistics(
             earliest - timedelta(days=800),
             earliest - timedelta(seconds=1),
             {stat_id},
-            "month",
+            "hour",
             None,
             {"sum"},
         )

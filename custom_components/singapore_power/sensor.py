@@ -410,8 +410,13 @@ PREMISE_SENSOR_DESCRIPTIONS: tuple[SingaporePowerPremiseSensorDescription, ...] 
         value_fn=lambda d: t.sp_kwh_price if (t := _get_tariff(d)) else None,
         attributes_fn=lambda d: (
             {
+                "sp_kwh_price_excl_gst": t.sp_kwh_price_excl_gst,
                 "sp_monthly_estimate_sgd": t.sp_monthly_price,
                 "reference_consumption_kwh": t.reference_consumption_kwh,
+                "sp_gas_kwh_price": t.sp_gas_kwh_price,
+                "sp_gas_kwh_price_excl_gst": t.sp_gas_kwh_price_excl_gst,
+                "tariff_period": t.tariff_period,
+                "tariff_source": t.tariff_source,
                 "best_oem_fixed_rate_sgd_kwh": t.best_fixed_rate,
                 "best_oem_fixed_retailer": t.best_fixed_retailer,
                 "best_oem_fixed_plan": t.best_fixed_plan,

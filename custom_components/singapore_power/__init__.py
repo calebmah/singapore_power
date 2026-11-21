@@ -10,6 +10,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_ACCESS_TOKEN,
@@ -21,7 +22,9 @@ from .const import (
     CONF_SCAN_INTERVAL_MINUTES,
     CONF_TOKEN_EXPIRY,
     DOMAIN,
+    LEDGER_STORAGE_VERSION,
     PLATFORMS,
+    ledger_storage_key,
     parse_electricity_price,
     translated_error,
 )
@@ -149,3 +152,13 @@ async def async_unload_entry(
     if unload_ok and DOMAIN in hass.data:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, entry: SingaporePowerConfigEntry
+) -> None:
+    """Remove persisted ledger state when a Singapore Power config entry is deleted."""
+    store: Store[dict[str, Any]] = Store(
+        hass, LEDGER_STORAGE_VERSION, ledger_storage_key(entry.entry_id)
+    )
+    await store.async_remove()

@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 import json
 import logging
+import re
 from typing import Any
 
 import aiohttp
 
 from .auth import SingaporePowerAuth
 from .const import (
+    AMI_DAILY_MONTHS,
+    AMI_HALF_HOUR_MONTHS,
+    B2C_PRICE_PLAN_URL,
     BILL_PREFERENCES_URL,
     CONSUMPTION_URL,
+    DATAGOV_TARIFF_URL,
     EVA_CHARGE_HISTORY_URL,
     EVA_LATEST_SESSION_URL,
     EVA_UNPAID_URL,
@@ -22,6 +28,7 @@ from .const import (
     FROSTY_GRAPHQL_URL,
     GRAPHQL_URL,
     GREEN_GOALS_URL,
+    HH_BACKFILL_BATCH_SIZE,
     HTTP_TIMEOUT_SECONDS,
     JARVIS_METER_READINGS_V2_URL,
     JARVIS_PPMS_BALANCE_URL,
@@ -41,6 +48,9 @@ from .const import (
     QUERY_YCS_GET_PREMISE_TYPE,
     QUERY_YCS_PREMISES_DETAILS_V3,
     SCOPE_NOT_FOUND,
+    SG_GST_MULTIPLIER,
+    SINGSTAT_TARIFF_URL,
+    SPGROUP_TARIFF_PAGE_URL,
     TENGAH_PAIRED_FCUS_QUERY,
     TRANSPORT_ERROR_CHARS,
     TYCHE_WALLET_URL,
@@ -73,8 +83,11 @@ from .utils import (
     account_digits,
     cents_to_dollars,
     drop_future_points,
+    end_of_sg_day,
     fold_text,
     format_api_date,
+    month_windows_sg,
+    months_ago_sg_start,
     normalize_account_no,
     normalize_unit,
     now_sg,
@@ -87,10 +100,9 @@ from .utils import (
     round_sgd,
     safe_float,
     safe_log_text,
+    start_of_sg_day,
     trim_unreported_points,
 )
-
-from decimal import Decimal
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -200,11 +212,14 @@ class SingaporePowerApi:
                 timeout=aiohttp.ClientTimeout(total=timeout_seconds),
                 **kwargs,
             ) as resp:
-                raw_bytes = await resp.content.read(MAX_RESPONSE_BYTES + 1)
-                if len(raw_bytes) > MAX_RESPONSE_BYTES:
-                    raise ApiException(
-                        f"{method} {redacted} exceeded {MAX_RESPONSE_BYTES} bytes"
-                    )
+                buf = bytearray()
+                async for chunk in resp.content.iter_chunked(65536):
+                    buf.extend(chunk)
+                    if len(buf) > MAX_RESPONSE_BYTES:
+                        raise ApiException(
+                            f"{method} {redacted} exceeded {MAX_RESPONSE_BYTES} bytes"
+                        )
+                raw_bytes = bytes(buf)
 
                 if (
                     resp.status == 401
@@ -306,6 +321,7 @@ class SingaporePowerApi:
         *,
         authenticated: bool = True,
         timeout_seconds: int = OPTIONAL_HTTP_TIMEOUT_SECONDS,
+        record_failure: bool = True,
         **kwargs: Any,
     ) -> Any | None:
         """Execute a best-effort optional read, recording unexpected failures for HA diagnostics."""
@@ -320,14 +336,22 @@ class SingaporePowerApi:
             gql_err = _extract_graphql_errors(body)
             if gql_err:
                 redacted = redact_url_for_log(url)
-                _LOGGER.warning("%s %s returned GraphQL errors: %s", method, redacted, gql_err)
-                self._note_read_failure(method, url, f"GraphQL error: {gql_err}")
+                folded_err = fold_text(gql_err)
+                # Non-Tengah accounts receive GraphQL "Unauthorized" on Frosty FCU queries
+                if folded_err in ("unauthorized", "forbidden", "not authorized"):
+                    _LOGGER.debug("%s %s not enrolled (%s)", method, redacted, gql_err)
+                    return None
+                if record_failure:
+                    _LOGGER.warning("%s %s returned GraphQL errors: %s", method, redacted, gql_err)
+                    self._note_read_failure(method, url, f"GraphQL error: {gql_err}")
+                else:
+                    _LOGGER.debug("%s %s GraphQL error: %s", method, redacted, gql_err)
             return body
         except AuthException:
             raise
         except ApiException as err:
             # 404 (not enrolled) and 403 scope_not_found are normal steady-state absences
-            if err.status_code == 404 or "Scope not granted" in str(err):
+            if err.status_code == 404 or "Scope not granted" in str(err) or not record_failure:
                 _LOGGER.debug("Optional read absent (%s)", err)
                 return None
             _LOGGER.warning("Optional read failed: %s", err)
@@ -615,6 +639,14 @@ class SingaporePowerApi:
             )
 
         unit = normalize_unit(response_data.get("unit"), default_unit)
+        # Guard against SP's BFF returning Electricity (kWh) AMI data when queried for non-AMI water
+        if api_utility == "water" and unit == "kWh":
+            _LOGGER.debug(
+                "Ignoring kWh AMI chart response returned for non-AMI water request"
+            )
+            return AmiChartSummary(
+                utility_type="water", grouped_by=grouped_by, unit="m³"
+            )
         daily_limit = safe_float(response_data.get("daily_limit"))
 
         points: list[Consumption] = []
@@ -653,7 +685,8 @@ class SingaporePowerApi:
 
         cutoff = now or now_sg()
         points = drop_future_points(points, cutoff)
-        if grouped_by == "day":
+        recent_cutoff = start_of_sg_day(cutoff - timedelta(days=2))
+        if grouped_by in ("day", "month") and end_date >= recent_cutoff:
             points = trim_unreported_points(points)
         else:
             points.sort(key=lambda p: p.date)
@@ -665,6 +698,60 @@ class SingaporePowerApi:
             daily_limit=daily_limit,
             points=points,
         )
+
+    async def async_get_full_ami_half_hourly_history(
+        self,
+        premise_no: str,
+        utility_type: str,
+        today: date,
+        *,
+        months_count: int = AMI_DAILY_MONTHS,
+        hh_months_count: int = AMI_HALF_HOUR_MONTHS,
+        use_ppms: bool = False,
+        now: datetime | None = None,
+    ) -> tuple[list[Consumption], list[Consumption]]:
+        """Fetch 13-month daily + maximum-retention (~5 months) half-hourly AMI points."""
+        cutoff = now or now_sg()
+        daily_start = months_ago_sg_start(today, months_count)
+        day_end = end_of_sg_day(today)
+
+        daily_chart = await self.async_get_ami_chart(
+            premise_no,
+            utility_type,
+            daily_start,
+            day_end,
+            "month",
+            use_ppms=use_ppms,
+            now=cutoff,
+        )
+
+        windows = month_windows_sg(today, min(months_count, hh_months_count), end_cap=day_end)
+        all_hh_pts: list[Consumption] = []
+
+        for idx in range(0, len(windows), HH_BACKFILL_BATCH_SIZE):
+            batch = windows[idx : idx + HH_BACKFILL_BATCH_SIZE]
+            batch_res = await asyncio.gather(
+                *(
+                    self.async_get_ami_chart(
+                        premise_no,
+                        utility_type,
+                        w_start,
+                        w_end,
+                        "day",
+                        use_ppms=use_ppms,
+                        now=cutoff,
+                    )
+                    for w_start, w_end in batch
+                ),
+                return_exceptions=True,
+            )
+            for item in batch_res:
+                if isinstance(item, AuthException):
+                    raise item
+                if isinstance(item, AmiChartSummary) and item.points:
+                    all_hh_pts.extend(item.points)
+
+        return daily_chart.points, all_hh_pts
 
     async def async_get_consumption_history(
         self,
@@ -729,7 +816,7 @@ class SingaporePowerApi:
 
         cutoff = now or now_sg()
         points = drop_future_points(points, cutoff)
-        if grouped_by == "day":
+        if grouped_by in ("day", "month"):
             points = trim_unreported_points(points)
         else:
             points.sort(key=lambda p: p.date)
@@ -1076,26 +1163,46 @@ class SingaporePowerApi:
     async def async_get_tariff_comparison(
         self, monthly_kwh: float = 350.0
     ) -> TariffComparisonSummary | None:
-        """Fetch current SP regulated electricity tariff and best OEM retailer rates."""
+        """Fetch current SP regulated electricity tariff (via SP B2C/Public or SingStat/data.gov.sg)."""
         rounded_kwh = (
             round_half_up(Decimal(str(monthly_kwh)), "1")
             if monthly_kwh and monthly_kwh > 0
             else 350.0
         )
         ref_kwh = max(50, int(rounded_kwh or 350))
-        data = await self._optional_request(
-            "GET",
-            PRICE_PLAN_URL,
-            authenticated=False,
-            params={"consumption": str(ref_kwh)},
-        )
+
+        data: Any = None
+        for candidate_url, use_auth in (
+            (B2C_PRICE_PLAN_URL, True),
+            (PRICE_PLAN_URL, False),
+        ):
+            res = await self._optional_request(
+                "GET",
+                candidate_url,
+                authenticated=use_auth,
+                record_failure=False,
+                params={"consumption": str(ref_kwh)},
+            )
+            if isinstance(res, dict) and (
+                safe_float(res.get("sp_kwh_price")) is not None
+                or safe_float(res.get("sp_monthly_price")) is not None
+            ):
+                data = res
+                break
+
         if not isinstance(data, dict):
-            return None
+            web_tariff = await self._async_fetch_spgroup_web_tariff(ref_kwh)
+            if web_tariff is not None:
+                return web_tariff
+            return await self._async_fetch_gov_regulated_tariff(ref_kwh)
 
         sp_kwh_price = safe_float(data.get("sp_kwh_price"))
         sp_monthly = safe_float(data.get("sp_monthly_price"))
         if sp_kwh_price is None and sp_monthly is None:
-            return None
+            web_tariff = await self._async_fetch_spgroup_web_tariff(ref_kwh)
+            if web_tariff is not None:
+                return web_tariff
+            return await self._async_fetch_gov_regulated_tariff(ref_kwh)
         plans = data.get("price_plans") or []
 
         best_fixed_rate: float | None = None
@@ -1149,6 +1256,207 @@ class SingaporePowerApi:
             best_discount_retailer=best_disc_retailer,
             best_discount_plan=best_disc_plan,
             total_oem_plans=len(plans) if isinstance(plans, list) else 0,
+        )
+
+    async def _async_fetch_spgroup_web_tariff(
+        self, ref_kwh: int
+    ) -> TariffComparisonSummary | None:
+        """Fetch live current-quarter electricity & gas tariffs from SP Group's official tariff page."""
+        cents_re = re.compile(r"(\d+(?:\.\d+)?)\s*cents\s*/\s*kwh", re.IGNORECASE)
+        period_re = re.compile(r"\((wef[^)]+)\)", re.IGNORECASE)
+
+        try:
+            async with self._session.get(
+                SPGROUP_TARIFF_PAGE_URL,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant-SP/0.3)"},
+                timeout=aiohttp.ClientTimeout(total=12),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                buf = bytearray()
+                async for chunk in resp.content.iter_chunked(65536):
+                    buf.extend(chunk)
+                    if len(buf) > MAX_RESPONSE_BYTES:
+                        return None
+                html = bytes(buf).decode(JSON_ENCODING, errors="replace")
+        except Exception as err:
+            _LOGGER.debug("SP Group live tariff page unreachable: %s", safe_log_text(err))
+            return None
+
+        elec_incl: float | None = None
+        elec_excl: float | None = None
+        gas_incl: float | None = None
+        gas_excl: float | None = None
+        period_text: str | None = None
+
+        next_match = re.search(
+            r'<script\s+id="__NEXT_DATA__"[^>]*>([\s\S]*?)</script>',
+            html,
+            re.IGNORECASE,
+        )
+        if next_match:
+            try:
+                next_json = json.loads(next_match.group(1))
+            except json.JSONDecodeError:
+                next_json = None
+
+            stack: list[Any] = [next_json] if next_json is not None else []
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    desc_raw = node.get("description")
+                    text_raw = node.get("text")
+                    if isinstance(desc_raw, str) and isinstance(text_raw, str):
+                        folded_desc = fold_text(desc_raw)
+                        t_match = cents_re.search(text_raw)
+                        d_match = cents_re.search(desc_raw)
+                        p_match = period_re.search(desc_raw)
+                        if "electricity tariff" in folded_desc and t_match:
+                            val_incl = safe_float(t_match.group(1))
+                            if val_incl is not None and 5.0 <= val_incl <= 500.0:
+                                elec_incl = round_half_up(
+                                    Decimal(str(val_incl)) / Decimal("100"), "0.0001"
+                                )
+                            if d_match:
+                                val_excl = safe_float(d_match.group(1))
+                                if val_excl is not None and 5.0 <= val_excl <= 500.0:
+                                    elec_excl = round_half_up(
+                                        Decimal(str(val_excl)) / Decimal("100"), "0.0001"
+                                    )
+                            if p_match and not period_text:
+                                period_text = " ".join(p_match.group(1).split())
+                        elif "gas tariff" in folded_desc and t_match:
+                            g_incl = safe_float(t_match.group(1))
+                            if g_incl is not None and 5.0 <= g_incl <= 500.0:
+                                gas_incl = round_half_up(
+                                    Decimal(str(g_incl)) / Decimal("100"), "0.0001"
+                                )
+                            if d_match:
+                                g_excl = safe_float(d_match.group(1))
+                                if g_excl is not None and 5.0 <= g_excl <= 500.0:
+                                    gas_excl = round_half_up(
+                                        Decimal(str(g_excl)) / Decimal("100"), "0.0001"
+                                    )
+                    stack.extend(node.values())
+                elif isinstance(node, list):
+                    stack.extend(node)
+
+        # Plain-HTML fallback if CMS switches from __NEXT_DATA__ to RSC/SSR markup
+        if elec_incl is None:
+            stripped = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+            html_elec = re.search(
+                r"(\d+\.\d+)\s*cents/kWh\s+(?:(\d+\.\d+)\s*cents/kWh\s*\(w/o\s*GST\)\s*)?ELECTRICITY\s+TARIFF",
+                stripped,
+                re.IGNORECASE,
+            )
+            if html_elec:
+                v_in = safe_float(html_elec.group(1))
+                if v_in is not None and 5.0 <= v_in <= 500.0:
+                    elec_incl = round_half_up(Decimal(str(v_in)) / Decimal("100"), "0.0001")
+                if html_elec.group(2):
+                    v_ex = safe_float(html_elec.group(2))
+                    if v_ex is not None and 5.0 <= v_ex <= 500.0:
+                        elec_excl = round_half_up(Decimal(str(v_ex)) / Decimal("100"), "0.0001")
+
+        if elec_incl is None:
+            return None
+
+        monthly_est = round_sgd(Decimal(str(elec_incl)) * Decimal(ref_kwh))
+        return TariffComparisonSummary(
+            sp_kwh_price=elec_incl,
+            sp_kwh_price_excl_gst=elec_excl,
+            sp_monthly_price=monthly_est,
+            reference_consumption_kwh=float(ref_kwh),
+            sp_gas_kwh_price=gas_incl,
+            sp_gas_kwh_price_excl_gst=gas_excl,
+            tariff_period=period_text,
+            tariff_source="spgroup.com.sg",
+            total_oem_plans=0,
+        )
+
+    async def _async_fetch_gov_regulated_tariff(
+        self, ref_kwh: int
+    ) -> TariffComparisonSummary | None:
+        """Fallback to official Singapore SingStat (M890991) / data.gov.sg SP domestic tariff (+9% GST)."""
+        cents_pre_gst: float | None = None
+        gov_headers = {"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant-SP/0.3)"}
+
+        # 1. SingStat TableBuilder M890991 (chronological columns, newest at end)
+        ss_body = await self._optional_request(
+            "GET",
+            SINGSTAT_TARIFF_URL,
+            authenticated=False,
+            record_failure=False,
+            headers=gov_headers,
+        )
+        if isinstance(ss_body, dict):
+            rows = (ss_body.get("Data") or {}).get("row") or []
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                label = fold_text(str(row.get("rowText") or ""))
+                if "low tension" in label and "domestic" in label and "non-domestic" not in label:
+                    cols = row.get("columns") or []
+                    for col in reversed(cols if isinstance(cols, list) else []):
+                        if isinstance(col, dict):
+                            val = safe_float(col.get("value"))
+                            if val is not None and val > 0:
+                                cents_pre_gst = val
+                                break
+                    if cents_pre_gst is not None:
+                        break
+
+        # 2. data.gov.sg datastore fallback (d_61eac3cdb086814af485dcc682b75ae9)
+        if cents_pre_gst is None:
+            dg_body = await self._optional_request(
+                "GET",
+                DATAGOV_TARIFF_URL,
+                authenticated=False,
+                record_failure=False,
+                headers=gov_headers,
+            )
+            if isinstance(dg_body, dict):
+                records = (dg_body.get("result") or {}).get("records") or []
+                month_idx = {
+                    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+                }
+                for rec in records if isinstance(records, list) else []:
+                    if not isinstance(rec, dict):
+                        continue
+                    series = fold_text(str(rec.get("DataSeries") or ""))
+                    if "low tension" in series and "domestic" in series and "non-domestic" not in series:
+                        dated_vals: list[tuple[int, int, float]] = []
+                        for k, v in rec.items():
+                            if len(k) == 7 and k[:4].isdigit():
+                                m_num = month_idx.get(k[4:].lower())
+                                fval = safe_float(v)
+                                if m_num and fval is not None and fval > 0:
+                                    dated_vals.append((int(k[:4]), m_num, fval))
+                        if dated_vals:
+                            dated_vals.sort()
+                            cents_pre_gst = dated_vals[-1][2]
+                        break
+
+        if cents_pre_gst is None:
+            return None
+
+        kwh_incl_gst = round_half_up(
+            (Decimal(str(cents_pre_gst)) / Decimal("100")) * Decimal(SG_GST_MULTIPLIER),
+            "0.0001",
+        )
+        if kwh_incl_gst is None:
+            return None
+        monthly_est = round_sgd(Decimal(str(kwh_incl_gst)) * Decimal(ref_kwh))
+        return TariffComparisonSummary(
+            sp_kwh_price=kwh_incl_gst,
+            sp_kwh_price_excl_gst=round_half_up(
+                Decimal(str(cents_pre_gst)) / Decimal("100"), "0.0001"
+            ),
+            sp_monthly_price=monthly_est,
+            reference_consumption_kwh=float(ref_kwh),
+            tariff_source="singstat.gov.sg",
+            total_oem_plans=0,
         )
 
     async def async_get_green_goals(

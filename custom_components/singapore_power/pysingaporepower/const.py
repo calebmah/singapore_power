@@ -47,8 +47,8 @@ MAX_USERNAME_OCTETS = 254
 ERROR_VALUE_CHARS = 60
 TRANSPORT_ERROR_CHARS = 160
 
-# AMI backfill windows
-AMI_HALF_HOUR_DAYS = 31
+# AMI backfill windows (SP retains ~100 days of 30m slots and 13 months of daily totals)
+AMI_HALF_HOUR_MONTHS = 5
 AMI_DAILY_MONTHS = 13
 
 # Yggdrasil (Account & Premise GraphQL)
@@ -78,8 +78,17 @@ METER_READ_DETAILS_URL = f"{B2C_BASE_URL}/skalbox/b2c/smrd/v1/retrieveMeterReadD
 METER_READ_HISTORY_URL = f"{B2C_BASE_URL}/skalbox/b2c/smrd/v1/retrieveMeterReadingHistory"
 BILL_PREFERENCES_URL = f"{B2C_BASE_URL}/skalbox/b2c/account/v1/retrieveBillPreferences"
 
-# PricePlan (SP Regulated Tariff & Open Electricity Market Retailer Plans - Public)
+# PricePlan & Regulated Tariff Sources (SP API, SP Group Live Tariff Page, SingStat & data.gov.sg)
+B2C_PRICE_PLAN_URL = f"{B2C_BASE_URL}/priceplan/v2/plans/price"
 PRICE_PLAN_URL = f"{PUBLIC_BASE_URL}/priceplan/v2/plans/price"
+SPGROUP_TARIFF_PAGE_URL = "https://www.spgroup.com.sg/our-services/utilities/tariff-information"
+SINGSTAT_TARIFF_URL = "https://tablebuilder.singstat.gov.sg/api/table/tabledata/M890991"
+DATAGOV_TARIFF_URL = (
+    "https://data.gov.sg/api/action/datastore_search"
+    "?resource_id=d_61eac3cdb086814af485dcc682b75ae9"
+)
+SG_GST_MULTIPLIER = "1.09"
+HH_BACKFILL_BATCH_SIZE = 4
 
 # OneUp, Tyche, Eva & Notifications (Loyalty, EV Charging & In-App Alerts)
 ONEUP_AUTH_GRAPHQL_URL = f"{B2C_BASE_URL}/1up/authenticated/graphql"
@@ -134,6 +143,15 @@ KNOWN_ROUTE_SEGMENTS = frozenset(
         "priceplan",
         "plans",
         "price",
+        "our-services",
+        "utilities",
+        "tariff-information",
+        "api",
+        "table",
+        "tabledata",
+        "M890991",
+        "action",
+        "datastore_search",
         "1up",
         "authenticated",
         "tyche",

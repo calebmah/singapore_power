@@ -36,6 +36,12 @@ MAX_ELECTRICITY_PRICE_SGD_KWH = 10.0
 # Metadata refresh interval for slow-changing endpoints (tariffs, GreenUP, Green Goals, premise types)
 METADATA_REFRESH_HOURS = 6
 SLOW_POLL_MS = 60_000
+LEDGER_STORAGE_VERSION = 2
+
+
+def ledger_storage_key(entry_id: str) -> str:
+    """Return the Home Assistant Store key for a Singapore Power config entry ledger."""
+    return f"{DOMAIN}_ledger_{entry_id}"
 
 
 def parse_electricity_price(raw: object) -> float | None:

@@ -236,11 +236,16 @@ class GreenGoalSummary:
 
 @dataclass
 class TariffComparisonSummary:
-    """SP regulated electricity tariff and best Open Electricity Market (OEM) plan comparison."""
+    """SP regulated electricity/gas tariffs and best Open Electricity Market (OEM) plan comparison."""
 
     sp_kwh_price: float | None = None
+    sp_kwh_price_excl_gst: float | None = None
     sp_monthly_price: float | None = None
     reference_consumption_kwh: float | None = None
+    sp_gas_kwh_price: float | None = None
+    sp_gas_kwh_price_excl_gst: float | None = None
+    tariff_period: str | None = None
+    tariff_source: str | None = None
     best_fixed_rate: float | None = None
     best_fixed_retailer: str | None = None
     best_fixed_plan: str | None = None

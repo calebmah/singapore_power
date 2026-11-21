@@ -25,8 +25,10 @@ from .const import (
     DEFAULT_ENABLE_RECORDER_STATS,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
+    LEDGER_STORAGE_VERSION,
     METADATA_REFRESH_HOURS,
     SLOW_POLL_MS,
+    ledger_storage_key,
     parse_electricity_price,
     translated_error,
 )
@@ -47,13 +49,11 @@ from .pysingaporepower import (
 )
 from .pysingaporepower.const import (
     AMI_DAILY_MONTHS,
-    AMI_HALF_HOUR_DAYS,
     OAUTH_ERROR_REQUIRES_VERIFICATION,
 )
 from .pysingaporepower.utils import (
     end_of_sg_day,
     merge_ami_daily_and_half_hourly,
-    months_ago_sg_start,
     now_sg,
     round_sgd,
     safe_log_text,
@@ -126,7 +126,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         self.entry = entry
         self.api = api
         self.store: Store[dict[str, Any]] = Store(
-            hass, 2, f"{DOMAIN}_ledger_{entry.entry_id}"
+            hass, LEDGER_STORAGE_VERSION, ledger_storage_key(entry.entry_id)
         )
 
         scan_minutes = int(
@@ -430,6 +430,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 today=today,
                 yesterday=yesterday,
                 now=now,
+                refresh_meta=refresh_meta,
                 ledgers=ledgers,
                 billed_summary=billed_summaries.get(util_key),
                 meter_reading=meter_readings.get(util_key),
@@ -493,6 +494,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         today: date,
         yesterday: date,
         now: datetime,
+        refresh_meta: bool,
         ledgers: dict[str, Any],
         billed_summary: UtilityBilledSummary | None,
         meter_reading: MeterReadingDetail | None,
@@ -508,10 +510,17 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         default_unit = "m³" if util_key == "water" else "kWh"
         unit = billed_summary.unit if billed_summary and billed_summary.unit else default_unit
 
-        ami_known_unsupported = ledger.get("ami_supported") is False and (
-            util_key not in premise.ami_utilities
-            and util_key not in premise.interval_utilities
+        explicitly_ami = (
+            util_key in premise.ami_utilities
+            or util_key in premise.interval_utilities
         )
+        new_account_elec_probe = (
+            util_key == "electricity"
+            and not premise.ami_utilities
+            and not premise.interval_utilities
+            and not (billed_summary and billed_summary.months)
+        )
+        should_query_ami = bool(pno) and (explicitly_ami or new_account_elec_probe)
 
         today_chart: AmiChartSummary | None = None
         yesterday_chart: AmiChartSummary | None = None
@@ -519,7 +528,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         prev_month_chart: AmiChartSummary | None = None
         used_ppms = False
 
-        if pno and not ami_known_unsupported:
+        if should_query_ami:
             need_prev_month = not ledger.get("daily_seeded") or today.day <= 5
             prev_month_end = start_of_sg_month(today) - timedelta(seconds=1)
             prev_month_start = start_of_sg_month(prev_month_end)
@@ -592,17 +601,10 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 except Exception:
                     pass
 
-        has_ami_data = any(
+        has_ami_data = explicitly_ami or any(
             c is not None and len(c.points) > 0
             for c in (today_chart, yesterday_chart, mtd_chart, prev_month_chart)
-        ) or (
-            util_key in premise.ami_utilities or util_key in premise.interval_utilities
         )
-
-        if not has_ami_data and pno:
-            ledger["ami_supported"] = False
-        elif has_ami_data:
-            ledger["ami_supported"] = True
 
         for chart in (today_chart, mtd_chart, yesterday_chart):
             if chart and chart.unit:
@@ -709,7 +711,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "today_usage": (
                 today_chart.total_consumption
                 if (today_chart and has_ami_data and today_chart.points)
-                else (0.0 if (today_chart and has_ami_data) else None)
+                else None
             ),
             "today_cost_sgd": today_cost,
             "today_slots_count": len(today_chart.points) if today_chart else 0,
@@ -720,7 +722,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             ),
             "yesterday_usage": (
                 yesterday_chart.total_consumption
-                if yesterday_chart and has_ami_data
+                if (yesterday_chart and has_ami_data and yesterday_chart.points)
                 else None
             ),
             "yesterday_cost_sgd": yesterday_cost,
@@ -743,7 +745,11 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "latest_interval_cost_sgd": latest_pt_cost,
             "latest_interval_anomaly": latest_pt.anomaly if latest_pt else None,
             "latest_interval_tags": latest_pt.tags if latest_pt else None,
-            "mtd_usage": mtd_chart.total_consumption if mtd_chart and has_ami_data else None,
+            "mtd_usage": (
+                mtd_chart.total_consumption
+                if (mtd_chart and has_ami_data and mtd_chart.points)
+                else None
+            ),
             "mtd_cost_sgd": mtd_cost,
             "mtd_days_count": len(mtd_chart.points) if mtd_chart else 0,
             "billed_current": latest_billed.current if latest_billed else None,
@@ -794,7 +800,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                 kind = job["kind"]
                 if kind == "ami":
                     ledger = ledgers.setdefault(job["ledger_key"], {})
-                    backfilled = bool(ledger.get("recorder_backfilled_v3"))
+                    backfilled = bool(ledger.get("recorder_backfilled"))
                     price_changed = (
                         backfilled
                         and job["utility_key"] == "electricity"
@@ -802,43 +808,32 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     )
 
                     if not backfilled or price_changed:
-                        daily_start = months_ago_sg_start(today, AMI_DAILY_MONTHS)
-                        hh_start = start_of_sg_day(
-                            today - timedelta(days=AMI_HALF_HOUR_DAYS - 1)
-                        )
-                        day_end = end_of_sg_day(today)
-                        daily_res, hh_res = await asyncio.gather(
-                            self.api.async_get_ami_chart(
-                                job["premise_no"],
-                                job["utility_key"],
-                                daily_start,
-                                day_end,
-                                "month",
-                                use_ppms=job["use_ppms"],
-                                now=now,
-                            ),
-                            self.api.async_get_ami_chart(
-                                job["premise_no"],
-                                job["utility_key"],
-                                hh_start,
-                                day_end,
-                                "day",
-                                use_ppms=job["use_ppms"],
-                                now=now,
-                            ),
-                            return_exceptions=True,
-                        )
-                        daily_pts = (
-                            daily_res.points
-                            if isinstance(daily_res, AmiChartSummary)
+                        try:
+                            daily_pts, hh_pts = (
+                                await self.api.async_get_full_ami_half_hourly_history(
+                                    job["premise_no"],
+                                    job["utility_key"],
+                                    today,
+                                    months_count=AMI_DAILY_MONTHS,
+                                    use_ppms=job["use_ppms"],
+                                    now=now,
+                                )
+                            )
+                        except AuthException:
+                            raise
+                        except Exception as err:
+                            _LOGGER.warning(
+                                "Full 13-month AMI history fetch failed: %s",
+                                safe_log_text(err),
+                            )
+                            daily_pts = []
+                            hh_pts = list(job["interval_points"])
+
+                        merged = (
+                            merge_ami_daily_and_half_hourly(daily_pts, hh_pts)
+                            if (daily_pts and hh_pts)
                             else []
                         )
-                        hh_pts = (
-                            hh_res.points
-                            if isinstance(hh_res, AmiChartSummary)
-                            else list(job["interval_points"])
-                        )
-                        merged = merge_ami_daily_and_half_hourly(daily_pts, hh_pts)
                         if merged:
                             await async_import_full_series(
                                 hass=self.hass,
@@ -849,11 +844,28 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                                 points=merged,
                                 fallback_cost_rate=job["fallback_cost_rate"],
                                 prefer_rate_override=job["prefer_rate_override"],
-                                cost_only=price_changed,
+                                cost_only=(price_changed and backfilled),
                             )
-                            ledger["recorder_backfilled_v3"] = True
+                            ledger["recorder_backfilled"] = True
                             ledger["recorder_price_key"] = job["price_key"]
                             dirty = True
+                            _LOGGER.info(
+                                "Completed initial 13-month Recorder backfill for %s (%s): %d points",
+                                job["utility_key"],
+                                job["account_no"],
+                                len(merged),
+                            )
+                        elif not backfilled and job["interval_points"]:
+                            await async_import_hourly_statistics(
+                                hass=self.hass,
+                                account_no=job["account_no"],
+                                premise_label=job["premise_label"],
+                                utility_key=job["utility_key"],
+                                unit=job["unit"],
+                                interval_points=job["interval_points"],
+                                fallback_cost_rate=job["fallback_cost_rate"],
+                                prefer_rate_override=job["prefer_rate_override"],
+                            )
                     elif job["interval_points"]:
                         await async_import_hourly_statistics(
                             hass=self.hass,
@@ -936,8 +948,12 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
             "unit": unit,
             "has_ami": True,
             "cumulative_total": cumulative_total,
-            "today_usage": t_chart.total_consumption if t_chart else None,
-            "mtd_usage": m_chart.total_consumption if m_chart else None,
+            "today_usage": (
+                t_chart.total_consumption if (t_chart and t_chart.points) else None
+            ),
+            "mtd_usage": (
+                m_chart.total_consumption if (m_chart and m_chart.points) else None
+            ),
         }
 
     @staticmethod
@@ -952,9 +968,10 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
         mtd_chart: AmiChartSummary | None,
         prev_month_chart: AmiChartSummary | None,
         billed_summary: UtilityBilledSummary | None,
-    ) -> float:
+    ) -> float | None:
         """Compute a strictly non-decreasing cumulative total keyed by date/month periods."""
-        last_emitted = float(ledger.get("last_emitted_total", 0.0))
+        raw_last = ledger.get("last_emitted_total")
+        last_emitted = float(raw_last) if raw_last is not None else None
 
         if has_ami_data:
             daily_totals: dict[str, float] = dict(ledger.get("daily_totals") or {})
@@ -962,6 +979,7 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
 
             if (
                 not ledger.get("daily_seeded")
+                and last_emitted is not None
                 and last_emitted > 0.0
                 and not daily_totals
                 and anchor_total == 0.0
@@ -989,13 +1007,18 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     round(today_chart.total_consumption, 4),
                 )
 
+            # During an 8pm-8am AMI blackout on initial setup, avoid seeding a 0.0 baseline
+            # that would jump by hundreds of kWh when AMI comes online at 8am.
+            if not daily_totals and anchor_total == 0.0 and last_emitted is None:
+                return None
+
             cutoff_str = (today - timedelta(days=_DAILY_RETENTION_DAYS)).isoformat()
             for day_key in sorted(list(daily_totals.keys())):
                 if day_key < cutoff_str:
                     anchor_total = round(anchor_total + daily_totals.pop(day_key), 4)
 
             candidate = round(anchor_total + sum(daily_totals.values()), 4)
-            emitted = max(last_emitted, candidate)
+            emitted = max(last_emitted, candidate) if last_emitted is not None else candidate
 
             ledger["daily_seeded"] = True
             ledger["daily_anchor_total"] = anchor_total
@@ -1019,13 +1042,16 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     continue
                 monthly_totals[period_key] = round(m.current, 4)
 
+        if not monthly_totals and monthly_anchor == 0.0 and last_emitted is None:
+            return None
+
         sorted_periods = sorted(monthly_totals.keys())
         while len(sorted_periods) > _MONTHLY_RETENTION_COUNT:
             oldest = sorted_periods.pop(0)
             monthly_anchor = round(monthly_anchor + monthly_totals.pop(oldest), 4)
 
         candidate = round(monthly_anchor + sum(monthly_totals.values()), 4)
-        emitted = max(last_emitted, candidate)
+        emitted = max(last_emitted, candidate) if last_emitted is not None else candidate
 
         ledger["monthly_anchor_total"] = monthly_anchor
         ledger["monthly_totals"] = monthly_totals

@@ -595,13 +595,15 @@ class SingaporePowerAuth:
 
     @staticmethod
     async def _read_bounded_json(resp: aiohttp.ClientResponse) -> Any:
-        """Read up to MAX_RESPONSE_BYTES and decode UTF-8-SIG JSON safely."""
-        raw_bytes = await resp.content.read(MAX_RESPONSE_BYTES + 1)
-        if len(raw_bytes) > MAX_RESPONSE_BYTES:
-            raise ApiException(f"Auth0 response exceeded {MAX_RESPONSE_BYTES} bytes")
-        if not raw_bytes:
+        """Read full response across all chunks up to MAX_RESPONSE_BYTES and decode UTF-8-SIG JSON."""
+        buf = bytearray()
+        async for chunk in resp.content.iter_chunked(65536):
+            buf.extend(chunk)
+            if len(buf) > MAX_RESPONSE_BYTES:
+                raise ApiException(f"Auth0 response exceeded {MAX_RESPONSE_BYTES} bytes")
+        if not buf:
             return {}
-        text = raw_bytes.decode(JSON_ENCODING, errors="replace")
+        text = bytes(buf).decode(JSON_ENCODING, errors="replace")
         try:
             return json.loads(text)
         except json.JSONDecodeError:

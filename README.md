@@ -1,6 +1,6 @@
 # <img src="custom_components/singapore_power/brand/icon.png" width="40" height="40" align="top" alt="Singapore Power" /> Singapore Power (SP Group) Home Assistant Integration
 
-Custom Home Assistant integration (`v0.3.0`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Tariffs / OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
+Custom Home Assistant integration (`v0.3.4`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Tariffs / OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
 
 ## Key Capabilities
 
@@ -15,7 +15,7 @@ Custom Home Assistant integration (`v0.3.0`) for **Singapore Power (SP Group)** 
   - **SP EV Charging & Loyalty (Auto-Discovered When Enrolled):** EV Wallet Points & Dollar Balance (`Tyche`), Latest EV Charging Session, EV Last Charge (`kWh` & receipt cost/address), EV Unpaid Orders (`Eva`), Green Goals Electricity & Water Used + % vs. Last Year, SP GreenUP Leaves & Tier, and Unread In-App Notifications count.
   - **Binary Sensors:** GIRO Enabled, Recurring Card Payment, Paperless e-Bill, Smart Meter (AMI) Installed, Self Meter Reading Window Open, and **Smart Meter Usage Anomaly** (`problem` device class triggered when SP's AMI metadata flags water leaks or abnormal spikes).
 - **Hybrid 13-Month Backfill + Live 48-Hour Recorder Rewrite (Spike-Free Energy Dashboard):**
-  - **Instant 13-Month History on Setup:** Merges 13 months of daily AMI history with 31 days of half-hourly AMI slots (plus monthly non-AMI billed usage and `last_bill` utility bill statistics) into Home Assistant Recorder external statistics on first run.
+  - **One-Time 13-Month History on First Install:** Merges 13 months of daily AMI history with ~100 days (maximum SP retention) of half-hourly AMI slots — plus monthly non-AMI billed usage and `last_bill` utility bill statistics — into Home Assistant Recorder external statistics once on initial setup.
   - **Zero Early-Morning Spikes Without Restarts:** Every poll re-anchors strictly prior to `yesterday 00:00` and rewrites the live 48-hour sliding window (`yesterday` + `today`), retroactively healing SP's delayed early-morning half-hourly uploads automatically without needing a Home Assistant restart.
 - **Security, Hardening & Diagnostics:**
   - **Zero Plaintext Password Storage:** Your password is exchanged once for OAuth tokens during setup/reauth/reconfigure and never persisted to `.storage` (legacy stored passwords are automatically scrubbed on load).
