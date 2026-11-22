@@ -2,6 +2,9 @@
 
 Custom Home Assistant integration (`v0.3.6`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Electricity / Gas / Water Tariffs & OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
 
+> [!NOTE]
+> **AI & Unofficial Project Disclaimer:** Portions of this integration (including API analysis, code, and documentation) were developed with the assistance of AI tools and tested against a live Home Assistant instance. This is an independent community project and is not affiliated with, endorsed by, or supported by SP Group. Use at your own risk.
+
 ## Key Capabilities
 
 - **Full Multi-Premise Household Utility Coverage:**
