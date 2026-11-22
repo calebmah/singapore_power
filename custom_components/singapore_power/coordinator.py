@@ -1025,8 +1025,6 @@ class SingaporePowerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]])
                     round(today_chart.total_consumption, 4),
                 )
 
-            # During an 8pm-8am AMI blackout on initial setup, avoid seeding a 0.0 baseline
-            # that would jump by hundreds of kWh when AMI comes online at 8am.
             if not daily_totals and anchor_total == 0.0 and last_emitted is None:
                 return None
 

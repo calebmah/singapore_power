@@ -125,6 +125,9 @@ async def async_setup_entry(
         curr_non_price = _non_price_options(curr_opts)
         curr_price = parse_electricity_price(curr_opts.get(CONF_ELECTRICITY_PRICE))
 
+        if curr_non_price == prev_non_price and curr_price == prev_price:
+            return
+
         if curr_non_price == prev_non_price and curr_price != prev_price:
             prev_price = curr_price
             await coordinator.async_handle_price_option_change()

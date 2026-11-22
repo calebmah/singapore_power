@@ -1,6 +1,6 @@
 # <img src="custom_components/singapore_power/brand/icon.png" width="40" height="40" align="top" alt="Singapore Power" /> Singapore Power (SP Group) Home Assistant Integration
 
-Custom Home Assistant integration (`v0.3.5`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Electricity / Gas / Water Tariffs & OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
+Custom Home Assistant integration (`v0.3.6`) for **Singapore Power (SP Group)** utilities and smart energy services in Singapore — covering **Multi-Premise Electricity, Water, Piped Gas, Tengah Centralized Cooling & Room FCUs, Billing & Payments, Hardware Meter Readings, Regulated Electricity / Gas / Water Tariffs & OEM Comparisons, EV Charging & Rewards, Sustainability Green Goals, and GreenUP Loyalty**.
 
 ## Key Capabilities
 
@@ -16,7 +16,7 @@ Custom Home Assistant integration (`v0.3.5`) for **Singapore Power (SP Group)** 
   - **Binary Sensors:** GIRO Enabled, Recurring Card Payment, Paperless e-Bill, Smart Meter (AMI) Installed, Self Meter Reading Window Open, and **Smart Meter Usage Anomaly** (`problem` device class triggered when SP's AMI metadata flags water leaks or abnormal spikes).
 - **Hybrid 13-Month Backfill + Live 48-Hour Recorder Rewrite (Spike-Free Energy Dashboard):**
   - **One-Time 13-Month History on First Install:** Merges 13 months of daily AMI history with ~100 days (maximum SP retention) of half-hourly AMI slots — plus monthly non-AMI billed usage and `last_bill` utility bill statistics — into Home Assistant Recorder external statistics once on initial setup.
-  - **Zero Early-Morning Spikes Without Restarts:** Every poll re-anchors strictly prior to `yesterday 00:00` and rewrites the live 48-hour sliding window (`yesterday` + `today`), retroactively healing SP's delayed early-morning half-hourly uploads automatically without needing a Home Assistant restart.
+  - **Live 48-Hour Sliding-Window Backfill:** Every poll re-anchors strictly prior to `yesterday 00:00` and updates the live 48-hour window (`yesterday` + `today`), placing SP's ~5-hour-delayed 4-hour smart meter batches into their exact historical hours without spikes or restarts.
 - **Security, Hardening & Diagnostics:**
   - **Zero Plaintext Password Storage:** Your password is exchanged once for OAuth tokens during setup/reauth/reconfigure and never persisted to `.storage` (legacy stored passwords are automatically scrubbed on load).
   - **Complete Auth0 MFA & Anti-Lockout Protection:** Supports Authenticator App (`6-digit TOTP`), **SMS OTP**, and **Email OTP**, 60-second failed-login cooldowns, graceful handling of Auth0 `requires_verification` challenges without destructive reauth loops, PII-redacted URL logging, 8 MB bounded `utf-8-sig` responses, `Decimal` half-up cent rounding, UI `reconfigure` flow, and one-click PII-redacted **Home Assistant Diagnostics**.

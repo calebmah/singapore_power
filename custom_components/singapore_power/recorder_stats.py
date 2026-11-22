@@ -221,7 +221,7 @@ async def async_import_hourly_statistics(
     fallback_cost_rate: float | None = None,
     prefer_rate_override: bool = False,
 ) -> None:
-    """Overwrite the live 48-hour sliding window in Recorder, healing delayed early-morning SP uploads."""
+    """Update the live 48-hour sliding window in Recorder as SP publishes 4-hour AMI batches."""
     if not interval_points or "recorder" not in hass.config.components:
         return
 
